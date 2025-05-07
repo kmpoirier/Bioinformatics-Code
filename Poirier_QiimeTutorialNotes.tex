@@ -1,0 +1,192 @@
+#download barcodes.fastq.gz file and sequences.fastq.gz file
+qiime tools import \
+  --type EMPSingleEndSequences \
+  --input-path emp-single-end-sequences \
+  --output-path emp-single-end-sequences.qza #samples are multiplex
+  
+  # produces emp-single-end-sequences.qza file
+  
+  qiime tools peek emp-single-end-sequences.qza #checks to see if UUID, type and data formate existis
+  
+  #Demultiplexing sequences
+  qiime demux emp-single \
+  --i-seqs emp-single-end-sequences.qza \
+  --m-barcodes-file sample-metadata.tsv \
+  --m-barcodes-column barcode-sequence \
+  --o-per-sample-sequences demux.qza \
+  --o-error-correction-details demux-details.qza #demultiplexing sequences by organizing data so that the barcode is associated with each sample
+  
+  #outputs demux-details.qza which conains Golay error correction details and demux.qza which contains demultiplexed sequences
+  
+  qiime demux summarize \
+  --i-data demux.qza \
+  --o-visualization demux.qzv #generates summary of demultiplexing results which provides summary of the distribution of sequence qualities
+  
+  #output demux.qzv
+  
+  #Sequence quality control and feature table construction
+  #Option 1: DADA2
+  qiime dada2 denoise-single \ #use DADA2 by removing m bases and removes each sequence at position n
+  --i-demultiplexed-seqs demux.qza \
+  --p-trim-left 0 \
+  --p-trunc-len 120 \
+  --o-representative-sequences rep-seqs-dada2.qza \
+  --o-table table-dada2.qza \
+  --o-denoising-stats stats-dada2.qza #filter phiX reads from illumina and denoise data using DADA2. 
+  
+  #output stats-dada2.qza,  table-dada2.qza and rep-seqs-dada2.qza
+  
+  #Option 2: Deblur
+  qiime quality-filter q-score \ #uses Deblur instead of DADA2 (suppose to be faster but less efficient) filtiers quality by quality scores 
+ --i-demux demux.qza \
+ --o-filtered-sequences demux-filtered.qza \
+ --o-filter-stats demux-filter-stats.qza
+ 
+ #output: demux-filtered.qza, demux-filter-stats.qza
+ 
+ qiime deblur denoise-16S \ #trunacates sequences at postion n
+  --i-demultiplexed-seqs demux-filtered.qza \
+  --p-trim-length 120 \ #trim at the length where the quality scores decrease
+  --o-representative-sequences rep-seqs-deblur.qza \
+  --o-table table-deblur.qza \
+  --p-sample-stats \
+  --o-stats deblur-stats.qza
+  
+  #output deblur-stats.qza, table-deblur.qza, rep-seqs-deblur.qza
+  
+  qiime metadata tabulate \
+  --m-input-file demux-filter-stats.qza \
+  --o-visualization demux-filter-stats.qzv
+qiime deblur visualize-stats \
+  --i-deblur-stats deblur-stats.qza \
+  --o-visualization deblur-stats.qzv #a way to visualize summary statistics 
+  
+  #output demux-filter-stats.qzv, deblur-stats.qzv
+  
+  
+  #feature tables and feature data summaries
+  qiime feature-table summarize \ #give info on how many sequences are associated with each sample and each feature, histogram of distributions and summary statistics
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file sample-metadata.tsv
+qiime feature-table tabulate-seqs \ #mapping of feature IDs to sequences and provide links to easily BLAST
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv 
+  
+  #output table.qzv, rep-seqs.qzv
+  
+  #Generate a tree for phylogenetic diversity analyses
+  qiime phylogeny align-to-tree-mafft-fasttree \ #uses Faith's phylogenic Diversity and weighted and unweighted UniFrac --> multiple sequence alignment of the sequences from feature data 
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \ #filters the alignment to remove positions that are very varied
+  --o-tree unrooted-tree.qza \ #produce phylogenetic tree
+  --o-rooted-tree rooted-tree.qza #root the tree
+  
+  #output: aligned-rep-seqs.qza, masked-aligned-rep-seqs.qza, rooted-tree.qza, unrooted-tree.qza
+  
+  #Alpha and beta diversity analysis
+  
+ qiime diversity core-metrics-phylogenetic \ #rarefires the feature table and computes aplha and beta diversity mathces and produces PCoA plots using Emperor 
+  --i-phylogeny rooted-tree.qza \
+  --i-table table.qza \
+  --p-sampling-depth 1103 \ #randomly resample the counts of each sample 1103 times
+  --m-metadata-file sample-metadata.tsv \
+  --output-dir core-metrics-results
+  
+  qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization core-metrics-results/evenness-group-significance.qzv #retreive microbial composition of the samples in the metadata using alpha diversity  (Faith Phylogenetic Diversity)
+  
+  qiime diversity beta-group-significance \ #using beta diversity 
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --m-metadata-column body-site \
+  --o-visualization core-metrics-results/unweighted-unifrac-body-site-significance.qzv \
+  --p-pairwise #using PERMANOVA will test the distances between samples within a group such as body, then do a pairwise  tests
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --m-metadata-column subject \
+  --o-visualization core-metrics-results/unweighted-unifrac-subject-group-significance.qzv \
+  --p-pairwise 
+  
+  qiime emperor plot \ #use Emperor (used for visualizing high throughout microbial ecology datasets)
+  --i-pcoa core-metrics-results/unweighted_unifrac_pcoa_results.qza \ 
+  --m-metadata-file sample-metadata.tsv \
+  --p-custom-axes days-since-experiment-start \
+  --o-visualization core-metrics-results/unweighted-unifrac-emperor-days-since-experiment-start.qzv #use unweighted UniFrac metrics to make PCoA plots
+
+qiime emperor plot \ 
+  --i-pcoa core-metrics-results/bray_curtis_pcoa_results.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --p-custom-axes days-since-experiment-start \
+  --o-visualization core-metrics-results/bray-curtis-emperor-days-since-experiment-start.qzv #use Bray-Curtis to make PCoA plots
+  
+  #Alpha rarefaction plotting
+  qiime diversity alpha-rarefaction \ #visualizer that computes 1 or more alpha diversity metrics at multiple sampling depths 
+  --i-table table.qza \
+  --i-phylogeny rooted-tree.qza \
+  --p-max-depth 4000 \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization alpha-rarefaction.qzv #10 rarefied tables are generated and diversity metrics are computed  and average diversity values were plotted for each sample
+  
+  # Taxonomic analysis
+  qiime feature-classifier classify-sklearn \ #use Naive Bayes classifier 
+  --i-classifier gg-13-8-99-515-806-nb-classifier.qza \
+  --i-reads rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+  
+  qiime taxa barplot \
+  --i-table table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization taxa-bar-plots.qzv #interactive bar plots 
+  
+  #Differential abundance testing with ANCOM-BC (used to idenify features that are differntly abundant across sample groups)
+  qiime feature-table filter-samples \
+  --i-table table.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --p-where "[body-site]='gut'" \
+  --o-filtered-table gut-table.qza
+  
+  qiime composition ancombc \
+  --i-table gut-table.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --p-formula 'subject' \
+  --o-differentials ancombc-subject.qza
+
+qiime composition da-barplot \
+  --i-data ancombc-subject.qza \
+  --p-significance-threshold 0.001 \
+  --o-visualization da-barplot-subject.qzv
+  
+  qiime taxa collapse \
+  --i-table gut-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-level 6 \
+  --o-collapsed-table gut-table-l6.qza
+
+qiime composition ancombc \
+  --i-table gut-table-l6.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --p-formula 'subject' \
+  --o-differentials l6-ancombc-subject.qza
+
+qiime composition da-barplot \
+  --i-data l6-ancombc-subject.qza \
+  --p-significance-threshold 0.001 \
+  --p-level-delimiter ';' \
+  --o-visualization l6-da-barplot-subject.qzv
+  
