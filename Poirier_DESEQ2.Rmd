@@ -1,0 +1,230 @@
+---
+title: "RNA_SEQ_LAB2"
+output: html_notebook
+---
+
+
+there are two control replicates and two TCPMOH replicates
+
+this tutorial will use DESeq2 which is used for RNA-seq and differential gene expression
+
+# necessary packages
+
+```{r}
+
+library( "DESeq2" )
+library(tidyverse)
+library(ggplot2)
+```
+
+# Data
+
+```{r}
+# define the path to the file
+# note this path is relative to the current working directory and the files are stored in a folder called data
+dmso1_data_file_path <- 'rna_counts_data.csv'
+# read in the file
+dmso_1_count_data <- read.csv(dmso1_data_file_path, header = TRUE)
+# show the first few lines
+head(dmso_1_count_data) # has gene names and counts per gene
+```
+Merge all the data onto one dataset and have it corrospond to GeneID
+
+```{r}
+# make the Geneid the row id 
+count_data <- dmso_1_count_data %>% remove_rownames %>% column_to_rownames(var="Geneid")
+head(count_data)
+```
+
+```{r}
+# get the sample names from the count_data matrix
+SampleName <- c(colnames(count_data[-1]))
+count_data <- subset(count_data, select =-1)
+
+#Using the map file, we can figure out what condition is each sample and then combine the map file with the rna_count_data
+condition <- c("Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "WT", "WT","Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "Mutation", "Mutation","Mutation", "WT", "WT", "WT" )
+# generate the metadata data frame
+meta_data <- data.frame(SampleName, condition) #table of sample name (sample) and condition
+
+# make the sample name the row id (index instead of column 1)
+meta_data <- meta_data %>% remove_rownames %>% column_to_rownames(var="SampleName")
+meta_data #combining the geneID and condition type (WT or mutated)
+```
+
+checking to see if the name of the columns in the count matrix is the same as the eta data file
+
+```{r}
+all(colnames(count_data) %in% rownames(meta_data)) #it says true
+
+all(colnames(count_data) == rownames(meta_data)) #true
+```
+
+#Differential Expression Analysis
+
+```{r}
+# create deseq data set object
+dds <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = meta_data,
+                              design = ~ condition) #create DESeq data object
+dds #gives you statistics on table; there are 59251 genes and 22 samples
+```
+
+Filter out low count genes
+
+```{r}
+# filter any counts less than 10
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dds
+```
+set reference factor
+
+```{r}
+# set the reference to be the control
+dds$condition <- relevel(dds$condition, ref = 'WT') #use relevel to make sure we are comparing with the WT
+```
+
+Getting Normalized Counts
+
+```{r}
+# get normalized counts
+dds <- estimateSizeFactors(dds)
+normalized_counts <- counts(dds, normalized = TRUE)
+```
+
+##Run Differential Exression
+
+```{r}
+dds <- DESeq(dds) #extracts a results table with log2 fold changes log(mutated/WT), p values and adjusted p values
+res <- results(dds)
+res
+
+summary(res) #summary
+
+sum(res$padj < 0.1, na.rm=TRUE) #know number of samples with p value <0.01
+
+res05 <- results(dds, alpha=0.05) #look at 0.05
+summary(res05)
+
+sum(res$padj < 0.05, na.rm=TRUE) #samples with p values <0.05
+```
+
+##Visualizing Results
+
+DESeq2 uses the so-called Benjamini-Hochberg (BH) adjustment (p-value calcualted by the fraction of false postives among the other samples)
+
+```{r}
+# convert results data to basic dataframe
+data <- data.frame(res)
+head(data) #gives you fold change and padj
+```
+
+PCA plot
+
+DESeq2 has a built-in function for plotting PCA plots, that uses ggplot2 under the hood
+
+```{r}
+rld <- rlog(dds)
+plotPCA(rld)
+```
+
+Volcano plots
+
+Scatterplot that uses p values versus fold change
+
+```{r}
+# add an additional column that identifies a gene as unregulated, downregulated, or unchanged
+# note the choice of pvalue and log2FoldChange cutoff. 
+data <- data %>%
+  mutate(
+  Expression = case_when(log2FoldChange >= log(1) & padj <= 0.05 ~ "Up-regulated",
+  log2FoldChange <= -log(1) & padj <= 0.05 ~ "Down-regulated",
+  TRUE ~ "Unchanged")
+  )
+head(data)
+```
+Get the top variable genes
+
+```{r}
+top <- 10
+# we are getting the top 10 up and down regulated genes by filtering the column Up-regulated and Down-regulated and sorting by the adjusted p-value. 
+top_genes <- bind_rows(
+  data %>%
+  filter(Expression == 'Up-regulated') %>%
+  arrange(padj, desc(abs(log2FoldChange))) %>%
+  head(top),
+  data %>%
+  filter(Expression == 'Down-regulated') %>%
+  arrange(padj, desc(abs(log2FoldChange))) %>%
+  head(top)
+  )
+# create a datframe just holding the top 10 genes
+Top_Hits = head(arrange(data,pvalue),10)
+Top_Hits
+```
+Volcano plots of all samples
+
+```{r}
+data$label = if_else(rownames(data) %in% rownames(Top_Hits), rownames(data), "")
+# basic plot
+p1 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + # -log10 conversion
+geom_point( size = 2/5) +
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+xlim(-4.5, 4.5)
+p1
+```
+Volcanono plot with all samples and most significant genes in red
+
+```{r}
+# basic plot with line + red for p < 0.05
+p2 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + # -log10 conversion
+geom_point(aes(color = Expression), size = 2/5) +
+#geom_hline(yintercept= -log10(0.05), linetype="dashed", linewidth = .4) +
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("firebrick3", "black", "firebrick3")) +
+xlim(-4.5, 4.5) +
+theme(legend.position = "none")
+p2
+```
+
+```{r}
+# with labels for top 10 sig overall
+library(ggrepel)
+p3 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + # -log10 conversion
+geom_point(aes(color = Expression), size = 2/5) +
+# geom_hline(yintercept=-log10(0.05), linetype="dashed", linewidth = .4) +
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("firebrick3", "black", "firebrick3")) +
+xlim(-4.5, 4.5) +
+theme(legend.position = "none") +
+geom_text_repel(aes(label = label), size = 2.5)
+p3
+```
+plot showing upregualted and downregulated genes
+
+```{r}
+# plot with up/down
+p4 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + # -log10 conversion
+geom_point(aes(color = Expression), size = 2/5) +
+#geom_hline(yintercept=-log10(0.05), linetype="dashed", linewidth = .4) +
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("dodgerblue3", "black", "firebrick3")) +
+xlim(-4.5, 4.5)
+p4
+```
+plot showing upregulated and downregulated with labels
+```{r}
+p5 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + # -log10 conversion
+geom_point(aes(color = Expression), size = 2/5) +
+# geom_hline(yintercept=-log10(0.05), linetype="dashed", linewidth = .4) +
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("dodgerblue3", "black", "firebrick3")) +
+xlim(-4.5, 4.5) +
+geom_text_repel(aes(label = label), size = 2.5)
+p5
+```

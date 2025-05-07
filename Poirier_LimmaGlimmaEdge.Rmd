@@ -1,0 +1,263 @@
+---
+title: "RNA_SEQ_LAB1"
+output: html_notebook
+---
+```{r}
+#import packages
+library(limma) #assess differential expression
+library(Glimma) #exploration of results
+library(edgeR) #import, organize, filter and normalize the data
+library(Mus.musculus)
+#BiocManager::install(force = TRUE, 'edgeR')
+```
+Three cell populations sorted from mammary gland of mice. RNA was sequenced of the three cell types sorted from m
+
+download GSE63310_RAW.tar and extract certain files containing raw gene level counts of each sample
+```{r}
+url <- "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE63310&format=file"
+utils::download.file(url, destfile="GSE63310_RAW.tar", mode="wb") 
+utils::untar("GSE63310_RAW.tar", exdir = ".") 
+files <- c("GSM1545535_10_6_5_11.txt", "GSM1545536_9_6_5_11.txt", "GSM1545538_purep53.txt",
+  "GSM1545539_JMS8-2.txt", "GSM1545540_JMS8-3.txt", "GSM1545541_JMS8-4.txt",
+  "GSM1545542_JMS8-5.txt", "GSM1545544_JMS9-P7c.txt", "GSM1545545_JMS9-P8c.txt")
+for(i in paste(files, ".gz", sep=""))
+  R.utils::gunzip(i, overwrite=TRUE) 
+```
+
+```{r}
+files <- c("GSM1545535_10_6_5_11.txt", "GSM1545536_9_6_5_11.txt", 
+   "GSM1545538_purep53.txt", "GSM1545539_JMS8-2.txt", 
+   "GSM1545540_JMS8-3.txt", "GSM1545541_JMS8-4.txt", 
+   "GSM1545542_JMS8-5.txt", "GSM1545544_JMS9-P7c.txt", 
+   "GSM1545545_JMS9-P8c.txt")
+read.delim(files[1], nrow=5)
+```
+
+```{r}
+x <- readDGE(files, columns=c(1,3)) #separtes and combines into a matrix of counts
+class(x)
+dim(x) #9 columns and 27179 rows
+```
+
+# Organizing sample information
+
+```{r}
+samplenames <- substring(colnames(x), 12, nchar(colnames(x))) #
+samplenames #provides name of each sample
+
+colnames(x) <- samplenames
+group <- as.factor(c("LP", "ML", "Basal", "Basal", "ML", "LP", 
+                     "Basal", "ML", "LP")) #cell types with three levels 
+x$samples$group <- group
+lane <- as.factor(rep(c("L004","L006","L008"), c(3,4,2))) #sequencing lane
+x$samples$lane <- lane
+x$samples
+```
+
+# Organizing gene annotations
+store gene level information using information from Mus.musculus (mouse gene information) that includes gene symbols, gene names, chromosomes and locations
+```{r}
+geneid <- rownames(x)
+genes <- select(Mus.musculus, keys=geneid, columns=c("SYMBOL", "TXCHROM"), keytype="ENTREZID")
+head(genes)
+```
+
+```{r}
+genes <- genes[!duplicated(genes$ENTREZID),] #remove duplicated gene ID
+```
+
+```{r}
+x$genes <- genes
+x
+```
+
+# Data pre-processing
+
+transformation from the raw scale:  
+trans raw count data to a scale like counts per million (CPM), log2-counts per million (log-CPM), reads per kilobase of transcript per million (RPKM), and fragments per kilobase of transcript per million (FPKM).
+
+```{r}
+cpm <- cpm(x)#use cpm function to transform data
+lcpm <- cpm(x, log=TRUE) #transform using log cpm
+```
+
+```{r}
+L <- mean(x$samples$lib.size) * 1e-6 #average library size by million
+M <- median(x$samples$lib.size) * 1e-6
+c(L, M) #we see that the average is about 45 million and so log2(2/45.5) = -4.51
+
+summary(lcpm)
+```
+
+# Removing genes that are lowly expressed
+some genes are not expressed or have low expression rates. Genes with a low number will be filtered out
+
+```{r}
+table(rowSums(x$counts==0)==9)
+
+keep.exprs <- filterByExpr(x, group=group)
+x <- x[keep.exprs,, keep.lib.sizes=FALSE]
+dim(x)
+```
+
+```{r}
+#density of log-CPM values for pre filtered data
+lcpm.cutoff <- log2(10/M + 2/L)
+library(RColorBrewer)
+nsamples <- ncol(x)
+col <- brewer.pal(nsamples, "Paired")
+par(mfrow=c(1,2))
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.26), las=2, main="", xlab="")
+title(main="A. Raw data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+for (i in 2:nsamples){
+den <- density(lcpm[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+#post filtered data
+legend("topright", samplenames, text.col=col, bty="n")
+lcpm <- cpm(x, log=TRUE)
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.26), las=2, main="", xlab="")
+title(main="B. Filtered data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+for (i in 2:nsamples){
+den <- density(lcpm[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", samplenames, text.col=col, bty="n")
+```
+
+#normalizing gene expression distributions
+
+required to normalize data to make sure the gene expression distribution is similar across all reads
+
+```{r}
+x <- calcNormFactors(x, method = "TMM") #use calcNormFactors to find trimmed mean M values
+x$samples$norm.factors
+
+x2 <- x
+x2$samples$norm.factors <- 1
+x2$counts[,1] <- ceiling(x2$counts[,1]*0.05)
+x2$counts[,2] <- x2$counts[,2]*5 #counts of first sample are reduced to 5%
+```
+
+```{r}
+par(mfrow=c(1,2))
+lcpm <- cpm(x2, log=TRUE)
+boxplot(lcpm, las=2, col=col, main="")
+title(main="A. Example: Unnormalised data",ylab="Log-cpm") #unnormalized data. Distribution is nor normal
+
+x2 <- calcNormFactors(x2)  
+x2$samples$norm.factors
+
+lcpm <- cpm(x2, log=TRUE)
+boxplot(lcpm, las=2, col=col, main="")
+title(main="B. Example: Normalised data",ylab="Log-cpm") #normalized data, even values
+```
+# Unsupervised clustering of samples
+
+Produce MDS plots for exploratory gene expression analysis. Sample groups are clustered together so a pairwise comparision within each cell type is best. Sequecning lanes do not clustered
+
+```{r}
+lcpm <- cpm(x, log=TRUE)
+par(mfrow=c(1,2))
+col.group <- group
+levels(col.group) <-  brewer.pal(nlevels(col.group), "Set1")
+col.group <- as.character(col.group)
+col.lane <- lane
+levels(col.lane) <-  brewer.pal(nlevels(col.lane), "Set2")
+col.lane <- as.character(col.lane)
+plotMDS(lcpm, labels=group, col=col.group) #use plotMDS to produce MDS plots
+title(main="A. Sample groups")
+plotMDS(lcpm, labels=lane, col=col.lane, dim=c(3,4))
+title(main="B. Sequencing lanes")
+```
+
+```{r}
+glMDSPlot(lcpm, labels=paste(group, lane, sep="_"), 
+          groups=x$samples[,c(2,5)], launch=FALSE) #could also use Glimma package to create MDS plot
+```
+
+# Differential expression analysis
+## Creating a design matrix and contrasts
+ produce linear models
+
+```{r}
+design <- model.matrix(~0+group+lane) #produce matrix with both populations and sequencing lane by removing intercept from first factor group
+colnames(design) <- gsub("group", "", colnames(design))
+design
+
+```
+
+```{r}
+contr.matrix <- makeContrasts(
+   BasalvsLP = Basal-LP, 
+   BasalvsML = Basal - ML, 
+   LPvsML = LP - ML, 
+   levels = colnames(design)) #Contrasts for pairwise comparisons between cell populations
+contr.matrix
+```
+
+# Removing heteroscedascity from count data
+mean-variance relationship is accommodated using precision weights calculated
+
+```{r}
+par(mfrow=c(1,2))
+v <- voom(x, design, plot=TRUE) #converts raw counts to log-CPM 
+v
+
+vfit <- lmFit(v, design)
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+efit <- eBayes(vfit)
+plotSA(efit, main="Final model: Mean-variance trend") #means and variance of each gne are plotted to show the dependence between the two before and after 
+```
+
+# Examining the number of DE genes
+
+```{r}
+summary(decideTests(efit))
+
+tfit <- treat(vfit, lfc=1) #calculate p-value with minimum log-FC requirement
+dt <- decideTests(tfit) #multiple comparisions
+summary(dt)
+
+de.common <- which(dt[,1]!=0 & dt[,2]!=0)
+length(de.common)
+
+head(tfit$genes$SYMBOL[de.common], n=20)
+
+vennDiagram(dt[,1:2], circle.col=c("turquoise", "salmon")) #give venn diagram showing number of genes in the comparision between basal vs LP
+
+write.fit(tfit, dt, file="results.txt") #save it as a txt
+```
+
+# Examining individual DE genes from top to bottom 
+
+```{r}
+basal.vs.lp <- topTreat(tfit, coef=1, n=Inf) #top DE genes are fitted and arranges genes from smallest to largest p-value, n=Inf includes all genes 
+basal.vs.ml <- topTreat(tfit, coef=2, n=Inf)
+head(basal.vs.lp)
+
+head(basal.vs.ml) #Cldn7 and Rasef are the top DE genes for basal vs LP and basal vs ML
+```
+
+# Useful graphical representations of differential expression results
+
+```{r}
+plotMD(tfit, column=1, status=dt[,1], main=colnames(tfit)[1], 
+       xlim=c(-8,13)) #mean differnce plots used to visualize log FCs from linear model against log-CPM 
+
+glMDPlot(tfit, coef=1, status=dt, main=colnames(tfit)[1],
+         side.main="ENTREZID", counts=lcpm, groups=group, launch=FALSE) #creates a html page that provides user to search for gene 
+```
+
+```{r}
+library(gplots)
+basal.vs.lp.topgenes <- basal.vs.lp$ENTREZID[1:100]
+i <- which(v$genes$ENTREZID %in% basal.vs.lp.topgenes)
+mycol <- colorpanel(1000,"blue","white","red")
+heatmap.2(lcpm[i,], scale="row",
+   labRow=v$genes$SYMBOL[i], labCol=group, 
+   col=mycol, trace="none", density.info="none", 
+   margin=c(8,6), lhei=c(2,10), dendrogram="column") #make heatmaps to look at gene expression to understand expresion within groups and samples using heatmap()
+```
