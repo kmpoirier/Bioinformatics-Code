@@ -15,7 +15,7 @@
 
 ## Poirier_DESEQ2.RMd:
 - is a R notebook that runs through a tutorial using DESeq2 which is used for RNA-seq and differential gene expression
-- This code uses the dataset from files rna_counts_data.csv and rna_map_updata_copy.csv to gain an understanding of differences between mutant cancer cells and normal cells from the same line.
+- This code uses the dataset from files rna_counts_data.csv and rna_map_updata_copy.csv to gain an understanding of differences between mutant cancer cells and normal cells from the same line
 - The tutorial is by Ashley Valentina Schwartz, PhD from https://ashleyschwartz.com/posts/2023/05/deseq2-tutorial 
 
 ## Poirier_LimmaGlimmaEdge.Rmd:
